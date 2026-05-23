@@ -5,8 +5,8 @@ origin data/
 # 生成的增强数据
 data_augmented/
 
-# 模型文件
-models/*.pth
+# 模型文件（保留预训练模型）
+# models/*.pth
 
 # 输出结果
 output/
