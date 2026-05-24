@@ -14,21 +14,28 @@ def _filter_green(img):
 
 
 def _filter_red(img):
-    """HSV 筛选红色"""
+    """HSV + RGB 双重筛选红色"""
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     mask1 = cv2.inRange(hsv, np.array([0, 40, 40]), np.array([10, 255, 255]))
     mask2 = cv2.inRange(hsv, np.array([160, 40, 40]), np.array([180, 255, 255]))
     red_mask = cv2.bitwise_or(mask1, mask2)
+    b, g, r = cv2.split(img)
+    rgb_mask = ((r > g) & (r > b) & (r > 80)).astype(np.uint8) * 255
+    red_mask = cv2.bitwise_and(red_mask, rgb_mask)
     kernel = np.ones((5, 5), np.uint8)
     return cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, kernel)
 
 
 def _find_valve_circle(img):
-    """HoughCircles 定位阀门圆"""
+    """HoughCircles 定位阀门圆（半径自适应图像大小）"""
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     gray = cv2.GaussianBlur(gray, (9, 9), 2)
+    h, w = gray.shape[:2]
+    short = min(h, w)
+    min_r = max(10, int(short * 0.1))
+    max_r = int(short * 0.48)
     circles = cv2.HoughCircles(gray, cv2.HOUGH_GRADIENT, dp=1.2, minDist=50,
-                               param1=100, param2=30, minRadius=20, maxRadius=200)
+                               param1=100, param2=30, minRadius=min_r, maxRadius=max_r)
     if circles is not None:
         circles = np.uint16(np.around(circles))
         c = max(circles[0], key=lambda c: c[2])
@@ -47,82 +54,105 @@ def _line_intersection(p1, d1, p2, d2):
     return (p1[0] + t * d1[0], p1[1] + t * d1[1])
 
 
-def _refine_center_by_lines(img, cx0, cy0, radius0, mask_ratio=0.8):
-    """
-    几何法精确定位圆心：找扇形两条直边（半径）的延长线交点
+def _color_centroid(img, cx0, cy0, radius0):
+    """在 HoughCircles 完整圆内，计算红绿色块的面积加权质心"""
+    h, w = img.shape[:2]
+    circle_mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.circle(circle_mask, (cx0, cy0), radius0, 255, -1)
 
-    1. 用初始圆的 0.8 蒙版过滤色块
-    2. 对色块轮廓用 HoughLinesP 检测直线
-    3. 筛选出扇形的两条半径边（过滤掉弧线和噪声线）
-    4. 两条半径线延长求交点 = 圆心
+    green_mask = cv2.bitwise_and(_filter_green(img), circle_mask)
+    red_mask = cv2.bitwise_and(_filter_red(img), circle_mask)
+    combined = cv2.bitwise_or(green_mask, red_mask)
+
+    cnts, _ = cv2.findContours(combined, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cnts = [c for c in cnts if cv2.contourArea(c) > 100]
+    if not cnts:
+        return cx0, cy0
+
+    total_area = 0
+    sum_x = 0
+    sum_y = 0
+    for c in cnts:
+        area = cv2.contourArea(c)
+        M = cv2.moments(c)
+        if M['m00'] == 0:
+            continue
+        cx_c = M['m10'] / M['m00']
+        cy_c = M['m01'] / M['m00']
+        sum_x += cx_c * area
+        sum_y += cy_c * area
+        total_area += area
+
+    if total_area == 0:
+        return cx0, cy0
+
+    return int(sum_x / total_area), int(sum_y / total_area)
+
+
+def _refine_center(img, cx0, cy0, radius0, mask_ratio=0.8):
     """
+    色块质心 + 几何法精确定位圆心
+
+    1. 在 HoughCircles 完整圆内算红绿色块的面积加权质心
+    2. 以质心为中心画蒙版，过滤色块
+    3. 对色块轮廓检测直线，找扇形半径边
+    4. 半径边延长线交点 = 精确圆心
+    """
+    cx_color, cy_color = _color_centroid(img, cx0, cy0, radius0)
+
     mask_r = int(radius0 * mask_ratio)
     h, w = img.shape[:2]
     circle_mask = np.zeros((h, w), dtype=np.uint8)
-    cv2.circle(circle_mask, (cx0, cy0), mask_r, 255, -1)
+    cv2.circle(circle_mask, (cx_color, cy_color), mask_r, 255, -1)
 
     green_mask = cv2.bitwise_and(_filter_green(img), circle_mask)
     red_mask = cv2.bitwise_and(_filter_red(img), circle_mask)
 
-    # 合并红绿掩膜，找所有色块轮廓
     combined = cv2.bitwise_or(green_mask, red_mask)
     cnts, _ = cv2.findContours(combined, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     cnts = sorted([c for c in cnts if cv2.contourArea(c) > 100], key=cv2.contourArea, reverse=True)[:4]
 
     if not cnts:
-        return cx0, cy0
+        return cx_color, cy_color
 
-    # 在轮廓图上检测直线
     contour_img = np.zeros((h, w), dtype=np.uint8)
     cv2.drawContours(contour_img, cnts, -1, 255, 2)
 
     lines = cv2.HoughLinesP(contour_img, 1, np.pi / 180, threshold=20,
                             minLineLength=mask_r // 4, maxLineGap=mask_r // 4)
     if lines is None:
-        return cx0, cy0
+        return cx_color, cy_color
 
-    # 筛选：只保留通过蒙版圆附近的线段（靠近圆心的线才是半径边）
     candidates = []
     for line in lines:
         x1, y1, x2, y2 = line[0]
-        # 线段中点
         mx, my = (x1 + x2) / 2, (y1 + y2) / 2
-        # 中点到初始圆心的距离
-        dist_center = np.sqrt((mx - cx0) ** 2 + (my - cy0) ** 2)
-        # 线段长度
         length = np.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
-        # 线段方向（归一化）
         dx, dy = x2 - x1, y2 - y1
         norm = np.sqrt(dx ** 2 + dy ** 2)
         if norm < 1:
             continue
         dx, dy = dx / norm, dy / norm
 
-        # 半径边的特征：方向大致指向圆心
-        # 从线段中点指向圆心的方向
-        to_center_x = cx0 - mx
-        to_center_y = cy0 - my
+        to_center_x = cx_color - mx
+        to_center_y = cy_color - my
         to_center_norm = np.sqrt(to_center_x ** 2 + to_center_y ** 2)
         if to_center_norm < 1:
             continue
         to_center_x /= to_center_norm
         to_center_y /= to_center_norm
 
-        # 方向与指向圆心的方向的夹角余弦（取绝对值，因为方向可能反向）
         dot = abs(dx * to_center_x + dy * to_center_y)
 
-        # 保留：方向大致指向圆心 且 长度合理的线
         if dot > 0.7 and length > mask_r * 0.15:
             candidates.append((x1, y1, x2, y2, length, dot))
 
     if len(candidates) < 2:
-        return cx0, cy0
+        return cx_color, cy_color
 
-    # 按 length * dot 排序，取前几条
     candidates.sort(key=lambda c: c[4] * c[5], reverse=True)
     top_lines = candidates[:6]
 
-    # 遍历线对，找交点
     intersections = []
     for i in range(len(top_lines)):
         for j in range(i + 1, len(top_lines)):
@@ -139,15 +169,13 @@ def _refine_center_by_lines(img, cx0, cy0, radius0, mask_ratio=0.8):
                 continue
 
             ix, iy = pt
-            # 交点应在蒙版圆内部
-            dist = np.sqrt((ix - cx0) ** 2 + (iy - cy0) ** 2)
+            dist = np.sqrt((ix - cx_color) ** 2 + (iy - cy_color) ** 2)
             if dist < mask_r * 0.6 and 0 <= ix < w and 0 <= iy < h:
                 intersections.append((ix, iy))
 
     if not intersections:
-        return cx0, cy0
+        return cx_color, cy_color
 
-    # 取中位数
     xs = [p[0] for p in intersections]
     ys = [p[1] for p in intersections]
     cx = int(np.median(xs))
@@ -156,75 +184,67 @@ def _refine_center_by_lines(img, cx0, cy0, radius0, mask_ratio=0.8):
     return cx, cy
 
 
-def _calc_angle(img, cx, cy, radius, mask_ratio):
-    """在指定圆心和蒙版比例下计算红绿轮廓面积比"""
-    mask_r = int(radius * mask_ratio)
-    h, w = img.shape[:2]
-    circle_mask = np.zeros((h, w), dtype=np.uint8)
-    cv2.circle(circle_mask, (cx, cy), mask_r, 255, -1)
-
-    green_mask = cv2.bitwise_and(_filter_green(img), circle_mask)
-    red_mask = cv2.bitwise_and(_filter_red(img), circle_mask)
-
-    green_cnts, _ = cv2.findContours(green_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    red_cnts, _ = cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    green_cnts = sorted([c for c in green_cnts if cv2.contourArea(c) > 10], key=cv2.contourArea, reverse=True)[:2]
-    red_cnts = sorted([c for c in red_cnts if cv2.contourArea(c) > 10], key=cv2.contourArea, reverse=True)[:2]
-
-    if not green_cnts and not red_cnts:
-        return 0.0
-    if not green_cnts:
-        return 0.0
-    if not red_cnts:
-        return 80.0
-
-    green_area = sum(cv2.contourArea(c) for c in green_cnts)
-    red_area = sum(cv2.contourArea(c) for c in red_cnts)
-    total = green_area + red_area
-
-    if total == 0:
-        return 0.0
-
-    angle = (green_area / total) * 80.0
-    return round(min(max(angle, 0.0), 80.0), 1)
-
-
-def predict_cvnew(image_path: str, refine_ratio: float = 0.8, calc_ratio: float = 0.7) -> float:
+def _calc_angle_arc(img, cx, cy, radius, inner_ratio=0.25, outer_ratio=0.75, n_radii=20):
     """
-    双重蒙版法预测阀门开度角度
+    弧长比法计算角度：用多个同心圆截红绿扇形，根据圆周上的弧长比推算角度
 
-    1. HoughCircles 初步定位圆
-    2. refine_ratio(0.8) 蒙版过滤色块
-    3. 对色块轮廓检测直线，找扇形两条半径边
-    4. 半径边延长线交点 = 精确圆心
-    5. 用新圆心 + calc_ratio(0.7) 蒙版计算面积比
-    6. 红绿轮廓面积比 → 角度
+    原理：红绿两个对称扇形组成圆环，任意半径的圆周被红绿各切出一段弧，
+    弧长比 = 扇形角度比 = 开度比例。多组半径取平均，抗检测缺失。
 
     Args:
-        image_path: 图片路径
-        refine_ratio: 定位用蒙版比例（较大，保留更多色块用于定位）
-        calc_ratio: 计算用蒙版比例（较小，避开边框红色噪声）
-
-    Returns:
-        预测角度 (0-80)
+        inner_ratio: 采样起始半径比例（避开中心）
+        outer_ratio: 采样结束半径比例（避开边缘）
+        n_radii: 采样半径数
     """
-    img = cv2.imread(image_path)
-    if img is None:
-        raise ValueError(f"无法读取图片: {image_path}")
+    h, w = img.shape[:2]
 
-    # 1. 初步定位
-    result = _find_valve_circle(img)
-    if result is None:
-        return _fallback_predict(img)
+    # 预算整张图的红绿掩膜
+    green_mask_full = _filter_green(img)
+    red_mask_full = _filter_red(img)
 
-    cx0, cy0, radius0 = result
+    r_inner = int(radius * inner_ratio)
+    r_outer = int(radius * outer_ratio)
+    if r_outer <= r_inner:
+        r_outer = r_inner + 1
 
-    # 2. 几何法精确定位圆心（用较大蒙版保留更多色块信息）
-    cx, cy = _refine_center_by_lines(img, cx0, cy0, radius0, refine_ratio)
+    ratios = []
+    all_green = 0
+    all_red = 0
+    for r in np.linspace(r_inner, r_outer, n_radii):
+        r = int(r)
+        n_samples = max(360, int(2 * np.pi * r))
+        angles = np.linspace(0, 2 * np.pi, n_samples, endpoint=False)
+        xs = (cx + r * np.cos(angles)).astype(int)
+        ys = (cy + r * np.sin(angles)).astype(int)
 
-    # 3. 用新圆心 + 较小蒙版计算（避开边框红色噪声）
-    return _calc_angle(img, cx, cy, radius0, calc_ratio)
+        valid = (xs >= 0) & (xs < w) & (ys >= 0) & (ys < h)
+        xs_v = xs[valid]
+        ys_v = ys[valid]
+
+        if len(xs_v) < 10:
+            continue
+
+        green_count = np.sum(green_mask_full[ys_v, xs_v] > 0)
+        red_count = np.sum(red_mask_full[ys_v, xs_v] > 0)
+        all_green += green_count
+        all_red += red_count
+
+        total = green_count + red_count
+        if total > 20 and green_count > 5 and red_count > 5:
+            ratios.append(green_count / total)
+
+    # 有足够双色半径，取中位数
+    if len(ratios) >= 3:
+        angle = np.median(ratios) * 80.0
+        return round(min(max(angle, 0.0), 80.0), 1)
+
+    # 退化：用所有半径的总弧长比
+    total = all_green + all_red
+    if total > 0:
+        angle = (all_green / total) * 80.0
+        return round(min(max(angle, 0.0), 80.0), 1)
+
+    return 0.0
 
 
 def _fallback_predict(img):
@@ -247,3 +267,35 @@ def _fallback_predict(img):
 
     angle = (green_area / total) * 80.0
     return round(min(max(angle, 0.0), 80.0), 1)
+
+
+def predict_cvnew(image_path: str, refine_ratio: float = 0.8) -> float:
+    """
+    色块质心 + 几何法 + 弧长比法预测阀门开度角度
+
+    1. HoughCircles 初步定位圆
+    2. 在大圆内计算红绿色块质心，以质心为中心画蒙版
+    3. 对蒙版内色块轮廓检测直线，找扇形半径边
+    4. 半径边延长线交点 = 精确圆心
+    5. 用多个同心圆截红绿扇形，根据弧长比推算角度
+
+    Args:
+        image_path: 图片路径
+        refine_ratio: 定位用蒙版比例（较大，保留更多色块用于定位）
+
+    Returns:
+        预测角度 (0-80)
+    """
+    img = cv2.imread(image_path)
+    if img is None:
+        raise ValueError(f"无法读取图片: {image_path}")
+
+    result = _find_valve_circle(img)
+    if result is None:
+        return _fallback_predict(img)
+
+    cx0, cy0, radius0 = result
+
+    cx, cy = _refine_center(img, cx0, cy0, radius0, refine_ratio)
+
+    return _calc_angle_arc(img, cx, cy, radius0)

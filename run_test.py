@@ -4,7 +4,6 @@ import csv
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
-from cv_predictor import predict_cv
 from cvnew_predictor import predict_cvnew
 from cnn_predictor import predict_cnn
 from ensemble import predict_ensemble
@@ -41,13 +40,8 @@ def main():
 
     print(f"找到 {len(images)} 张图片\n")
 
-    # CV
-    print("=== CV 预测 ===")
-    cv_results = run_prediction("CV", predict_cv, images)
-    save_csv(cv_results, os.path.join(OUTPUT_DIR, "result_cv.csv"))
-
     # CVnew
-    print("\n=== CVnew 预测（内圈法）===")
+    print("=== CVnew 预测（双重蒙版法）===")
     cvnew_results = run_prediction("CVnew", predict_cvnew, images)
     save_csv(cvnew_results, os.path.join(OUTPUT_DIR, "result_cvnew.csv"))
 
@@ -58,7 +52,7 @@ def main():
         save_csv(cnn_results, os.path.join(OUTPUT_DIR, "result_cnn.csv"))
 
         # 融合
-        print("\n=== 融合预测 (CV:0.3 + CNN:0.7) ===")
+        print("\n=== 融合预测 (CVnew:0.3 + CNN:0.7) ===")
         ens_results = run_prediction("Ensemble", lambda p: predict_ensemble(p, MODEL_PATH), images)
         save_csv(ens_results, os.path.join(OUTPUT_DIR, "result_ensemble.csv"))
     else:
@@ -73,20 +67,18 @@ def main():
             for row in csv.DictReader(f):
                 gt[row['filename']] = float(row['angle'])
 
-        print(f"{'文件':<12} {'真实':>6} {'CV':>8} {'CVnew':>8} {'CNN':>8} {'融合':>8}")
-        print("-" * 56)
-        cv_dict = dict(cv_results)
+        print(f"{'文件':<12} {'真实':>6} {'CVnew':>8} {'CNN':>8} {'融合':>8}")
+        print("-" * 46)
         cvnew_dict = dict(cvnew_results)
         cnn_dict = dict(cnn_results) if os.path.exists(MODEL_PATH) else {}
         ens_dict = dict(ens_results) if os.path.exists(MODEL_PATH) else {}
 
         for img in images:
             true_angle = gt.get(img, '-')
-            cv_a = cv_dict.get(img, '-')
             cvnew_a = cvnew_dict.get(img, '-')
             cnn_a = cnn_dict.get(img, '-')
             ens_a = ens_dict.get(img, '-')
-            print(f"{img:<12} {true_angle:>6} {cv_a:>8} {cvnew_a:>8} {cnn_a:>8} {ens_a:>8}")
+            print(f"{img:<12} {true_angle:>6} {cvnew_a:>8} {cnn_a:>8} {ens_a:>8}")
 
 
 if __name__ == "__main__":

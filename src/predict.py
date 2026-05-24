@@ -8,7 +8,7 @@ from typing import List, Tuple
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from ensemble import predict_ensemble
-from cv_predictor import predict_cv
+from cvnew_predictor import predict_cvnew
 from cnn_predictor import predict_cnn
 
 def predict_folder(
@@ -52,9 +52,9 @@ def predict_folder(
             angle = predict_ensemble(image_path, model_path)
             method = "ensemble"
         else:
-            # 仅使用 CV
-            angle = predict_cv(image_path)
-            method = "cv"
+            # 仅使用 CVnew
+            angle = predict_cvnew(image_path)
+            method = "cvnew"
 
         results.append((filename, angle))
         print(f"{filename}: {angle}° ({method})")

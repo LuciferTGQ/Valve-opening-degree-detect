@@ -10,7 +10,6 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 
-from cv_predictor import predict_cv
 from cvnew_predictor import predict_cvnew
 from cnn_predictor import predict_cnn
 
@@ -39,17 +38,12 @@ def calc_metrics(gts, preds):
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    # 1. 加载数据
     data = load_ground_truth(DATA_DIR)
     filenames = [d[0] for d in data]
     gts = [d[1] for d in data]
     paths = [os.path.join(DATA_DIR, f) for f in filenames]
 
     print(f"加载 {len(data)} 张图片\n")
-
-    # 2. 三种算法预测
-    print("正在运行 CV 预测...")
-    cv_preds = [predict_cv(p) for p in paths]
 
     print("正在运行 CVnew 预测...")
     cvnew_preds = [predict_cvnew(p) for p in paths]
@@ -61,8 +55,7 @@ def main():
     else:
         print(f"CNN 模型不存在: {MODEL_PATH}，跳过")
 
-    # 3. 计算指标
-    methods = {'CV': cv_preds, 'CVnew': cvnew_preds}
+    methods = {'CVnew': cvnew_preds}
     if cnn_preds:
         methods['CNN'] = cnn_preds
 
@@ -75,7 +68,6 @@ def main():
         mae, rmse, max_err = calc_metrics(gts, preds)
         print("{:<10} {:>6.1f} {:>7.1f} {:>8.1f}".format(name, mae, rmse, max_err))
 
-    # 4. 分段统计
     print("\n" + "=" * 50)
     print("分段指标 (MAE)")
     print("=" * 50)
@@ -98,32 +90,28 @@ def main():
             print("{:>10.1f}".format(mae), end="")
         print()
 
-    # 5. 保存详细 CSV
     csv_path = os.path.join(OUTPUT_DIR, "detailed_results.csv")
     with open(csv_path, 'w', newline='') as f:
         writer = csv.writer(f)
-        header = ['filename', 'ground_truth', 'CV', 'CVnew']
+        header = ['filename', 'ground_truth', 'CVnew']
         if cnn_preds:
             header.append('CNN')
         writer.writerow(header)
         for i in range(len(filenames)):
-            row = [filenames[i], gts[i], cv_preds[i], cvnew_preds[i]]
+            row = [filenames[i], gts[i], cvnew_preds[i]]
             if cnn_preds:
                 row.append(cnn_preds[i])
             writer.writerow(row)
     print(f"\n详细结果已保存到 {csv_path}")
 
-    # 6. 生成图像
     plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei']
     plt.rcParams['axes.unicode_minus'] = False
 
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 
-    # 图1: 预测值 vs 真实值
     ax = axes[0][0]
     x = np.arange(len(gts))
     ax.plot(x, gts, 'k-', label='真实值', linewidth=2)
-    ax.plot(x, cv_preds, 'b--', label='CV', alpha=0.8)
     ax.plot(x, cvnew_preds, 'g--', label='CVnew', alpha=0.8)
     if cnn_preds:
         ax.plot(x, cnn_preds, 'r--', label='CNN', alpha=0.8)
@@ -133,11 +121,8 @@ def main():
     ax.legend()
     ax.grid(True, alpha=0.3)
 
-    # 图2: 误差分布
     ax = axes[0][1]
-    cv_errors = [g - p for g, p in zip(gts, cv_preds)]
     cvnew_errors = [g - p for g, p in zip(gts, cvnew_preds)]
-    ax.scatter(gts, cv_errors, c='blue', alpha=0.6, label='CV', s=30)
     ax.scatter(gts, cvnew_errors, c='green', alpha=0.6, label='CVnew', s=30)
     if cnn_preds:
         cnn_errors = [g - p for g, p in zip(gts, cnn_preds)]
@@ -149,24 +134,18 @@ def main():
     ax.legend()
     ax.grid(True, alpha=0.3)
 
-    # 图3: 绝对误差柱状图
     ax = axes[1][0]
-    cv_abs_err = [abs(g - p) for g, p in zip(gts, cv_preds)]
     cvnew_abs_err = [abs(g - p) for g, p in zip(gts, cvnew_preds)]
-    width = 0.25
-    x = np.arange(len(gts))
-    ax.bar(x - width, cv_abs_err, width, label='CV', color='blue', alpha=0.7)
-    ax.bar(x, cvnew_abs_err, width, label='CVnew', color='green', alpha=0.7)
+    ax.bar(x, cvnew_abs_err, 0.4, label='CVnew', color='green', alpha=0.7)
     if cnn_preds:
         cnn_abs_err = [abs(g - p) for g, p in zip(gts, cnn_preds)]
-        ax.bar(x + width, cnn_abs_err, width, label='CNN', color='red', alpha=0.7)
+        ax.bar(x + 0.4, cnn_abs_err, 0.4, label='CNN', color='red', alpha=0.7)
     ax.set_xlabel('样本序号')
     ax.set_ylabel('绝对误差 (°)')
     ax.set_title('各样本绝对误差')
     ax.legend()
     ax.grid(True, alpha=0.3)
 
-    # 图4: 分段 MAE 对比
     ax = axes[1][1]
     range_labels = []
     mae_data = {name: [] for name in methods}
@@ -182,7 +161,7 @@ def main():
     x = np.arange(len(range_labels))
     n = len(methods)
     width = 0.8 / n
-    colors = {'CV': 'blue', 'CVnew': 'green', 'CNN': 'red'}
+    colors = {'CVnew': 'green', 'CNN': 'red'}
     for i, (name, vals) in enumerate(mae_data.items()):
         ax.bar(x + i * width - 0.4 + width / 2, vals, width, label=name, color=colors[name], alpha=0.7)
     ax.set_xticks(x)
