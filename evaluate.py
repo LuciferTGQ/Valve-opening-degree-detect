@@ -136,10 +136,10 @@ def main():
 
     ax = axes[1][0]
     cvnew_abs_err = [abs(g - p) for g, p in zip(gts, cvnew_preds)]
-    ax.bar(x, cvnew_abs_err, 0.4, label='CVnew', color='green', alpha=0.7)
+    ax.bar(x - 0.2, cvnew_abs_err, 0.4, label='CVnew', color='green', alpha=0.7)
     if cnn_preds:
         cnn_abs_err = [abs(g - p) for g, p in zip(gts, cnn_preds)]
-        ax.bar(x + 0.4, cnn_abs_err, 0.4, label='CNN', color='red', alpha=0.7)
+        ax.bar(x + 0.2, cnn_abs_err, 0.4, label='CNN', color='red', alpha=0.7)
     ax.set_xlabel('样本序号')
     ax.set_ylabel('绝对误差 (°)')
     ax.set_title('各样本绝对误差')

@@ -9,7 +9,7 @@ def _filter_green(img):
     b, g, r = cv2.split(img)
     rgb_mask = ((g > r) & (g > b) & (g > 50)).astype(np.uint8) * 255
     green_mask = cv2.bitwise_and(hsv_mask, rgb_mask)
-    kernel = np.ones((5, 5), np.uint8)
+    kernel = np.ones((3, 3), np.uint8)
     return cv2.morphologyEx(green_mask, cv2.MORPH_OPEN, kernel)
 
 
@@ -22,7 +22,7 @@ def _filter_red(img):
     b, g, r = cv2.split(img)
     rgb_mask = ((r > g) & (r > b) & (r > 80)).astype(np.uint8) * 255
     red_mask = cv2.bitwise_and(red_mask, rgb_mask)
-    kernel = np.ones((5, 5), np.uint8)
+    kernel = np.ones((3, 3), np.uint8)
     return cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, kernel)
 
 
@@ -184,7 +184,8 @@ def _refine_center(img, cx0, cy0, radius0, mask_ratio=0.8):
     return cx, cy
 
 
-def _calc_angle_arc(img, cx, cy, radius, inner_ratio=0.25, outer_ratio=0.75, n_radii=20):
+def _calc_angle_arc(img, cx, cy, radius, inner_ratio=0.25, outer_ratio=0.75, n_radii=20,
+                    green_mask_override=None, red_mask_override=None):
     """
     弧长比法计算角度：用多个同心圆截红绿扇形，根据圆周上的弧长比推算角度
 
@@ -195,12 +196,14 @@ def _calc_angle_arc(img, cx, cy, radius, inner_ratio=0.25, outer_ratio=0.75, n_r
         inner_ratio: 采样起始半径比例（避开中心）
         outer_ratio: 采样结束半径比例（避开边缘）
         n_radii: 采样半径数
+        green_mask_override: 自定义绿色掩膜（可选）
+        red_mask_override: 自定义红色掩膜（可选）
     """
     h, w = img.shape[:2]
 
     # 预算整张图的红绿掩膜
-    green_mask_full = _filter_green(img)
-    red_mask_full = _filter_red(img)
+    green_mask_full = green_mask_override if green_mask_override is not None else _filter_green(img)
+    red_mask_full = red_mask_override if red_mask_override is not None else _filter_red(img)
 
     r_inner = int(radius * inner_ratio)
     r_outer = int(radius * outer_ratio)
@@ -273,9 +276,9 @@ def predict_cvnew(image_path: str, refine_ratio: float = 0.8) -> float:
     """
     色块质心 + 几何法 + 弧长比法预测阀门开度角度
 
-    1. HoughCircles 初步定位圆
-    2. 在大圆内计算红绿色块质心，以质心为中心画蒙版
-    3. 对蒙版内色块轮廓检测直线，找扇形半径边
+    1. 用全图红绿色块找质心
+    2. 以质心为中心，用色块大小估算半径
+    3. 对色块轮廓检测直线，找扇形半径边
     4. 半径边延长线交点 = 精确圆心
     5. 用多个同心圆截红绿扇形，根据弧长比推算角度
 
@@ -290,12 +293,112 @@ def predict_cvnew(image_path: str, refine_ratio: float = 0.8) -> float:
     if img is None:
         raise ValueError(f"无法读取图片: {image_path}")
 
-    result = _find_valve_circle(img)
-    if result is None:
+    h, w = img.shape[:2]
+
+    # 用全图色块找质心
+    green_mask = _filter_green(img)
+    red_mask = _filter_red(img)
+    combined = cv2.bitwise_or(green_mask, red_mask)
+
+    cnts, _ = cv2.findContours(combined, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cnts = [c for c in cnts if cv2.contourArea(c) > 100]
+
+    if not cnts:
         return _fallback_predict(img)
 
-    cx0, cy0, radius0 = result
+    # 计算面积加权质心
+    total_area = 0
+    sum_x = 0
+    sum_y = 0
+    for c in cnts:
+        area = cv2.contourArea(c)
+        M = cv2.moments(c)
+        if M['m00'] == 0:
+            continue
+        cx_c = M['m10'] / M['m00']
+        cy_c = M['m01'] / M['m00']
+        sum_x += cx_c * area
+        sum_y += cy_c * area
+        total_area += area
 
+    if total_area == 0:
+        return _fallback_predict(img)
+
+    cx0 = int(sum_x / total_area)
+    cy0 = int(sum_y / total_area)
+
+    # 估算半径：用色块的边界框大小
+    all_points = np.vstack([c.reshape(-1, 2) for c in cnts])
+    x_min, y_min = all_points.min(axis=0)
+    x_max, y_max = all_points.max(axis=0)
+    radius0 = int(max(x_max - x_min, y_max - y_min) / 2)
+
+    if radius0 < 20:
+        radius0 = min(h, w) // 4
+
+    # 用几何法精确定位圆心
     cx, cy = _refine_center(img, cx0, cy0, radius0, refine_ratio)
 
-    return _calc_angle_arc(img, cx, cy, radius0)
+    # --- 分析色块配对，处理单色缺失情况 ---
+    mask_r = int(radius0 * 0.8)
+    pair_mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.circle(pair_mask, (cx, cy), mask_r, 255, -1)
+
+    green_in = cv2.bitwise_and(_filter_green(img), pair_mask)
+    red_in = cv2.bitwise_and(_filter_red(img), pair_mask)
+
+    green_cnts, _ = cv2.findContours(green_in, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    green_cnts = sorted([c for c in green_cnts if cv2.contourArea(c) > 30],
+                        key=cv2.contourArea, reverse=True)[:2]
+
+    red_cnts, _ = cv2.findContours(red_in, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    red_cnts = sorted([c for c in red_cnts if cv2.contourArea(c) > 30],
+                      key=cv2.contourArea, reverse=True)[:2]
+
+    def get_centroid_angle(cnt):
+        M = cv2.moments(cnt)
+        if M['m00'] == 0:
+            return None
+        return np.arctan2(M['m01'] / M['m00'] - cy, M['m10'] / M['m00'] - cx)
+
+    def angle_dist(a1, a2):
+        diff = a1 - a2
+        while diff > np.pi:
+            diff -= 2 * np.pi
+        while diff < -np.pi:
+            diff += 2 * np.pi
+        return abs(diff)
+
+    # 默认用全图掩膜
+    green_mask_final = _filter_green(img)
+    red_mask_final = _filter_red(img)
+
+    # 绿色只有一块，红色有两块
+    if len(green_cnts) == 1 and len(red_cnts) == 2:
+        g_angle = get_centroid_angle(green_cnts[0])
+        r_angles = [get_centroid_angle(c) for c in red_cnts]
+        if g_angle is not None and all(a is not None for a in r_angles):
+            # 找与绿色相邻的红色块
+            dist0 = angle_dist(g_angle, r_angles[0])
+            dist1 = angle_dist(g_angle, r_angles[1])
+            adjacent_idx = 0 if dist0 < dist1 else 1
+            # 只用这一对：绿色 + 相邻红色
+            green_mask_final = green_in
+            red_mask_final = np.zeros((h, w), dtype=np.uint8)
+            cv2.drawContours(red_mask_final, [red_cnts[adjacent_idx]], -1, 255, -1)
+
+    # 红色只有一块，绿色有两块
+    elif len(red_cnts) == 1 and len(green_cnts) == 2:
+        r_angle = get_centroid_angle(red_cnts[0])
+        g_angles = [get_centroid_angle(c) for c in green_cnts]
+        if r_angle is not None and all(a is not None for a in g_angles):
+            dist0 = angle_dist(r_angle, g_angles[0])
+            dist1 = angle_dist(r_angle, g_angles[1])
+            adjacent_idx = 0 if dist0 < dist1 else 1
+            red_mask_final = red_in
+            green_mask_final = np.zeros((h, w), dtype=np.uint8)
+            cv2.drawContours(green_mask_final, [green_cnts[adjacent_idx]], -1, 255, -1)
+
+    return _calc_angle_arc(img, cx, cy, radius0,
+                           green_mask_override=green_mask_final,
+                           red_mask_override=red_mask_final)
