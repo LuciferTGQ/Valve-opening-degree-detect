@@ -3,9 +3,9 @@ import os
 import sys
 import tempfile
 import shutil
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from ensemble import predict_ensemble
+from src.common.ensemble import predict_ensemble
 
 def test_predict_ensemble():
     """测试融合预测（CV + CNN）"""

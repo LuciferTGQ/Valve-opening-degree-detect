@@ -5,15 +5,32 @@ origin data/
 # 生成的增强数据
 data_augmented/
 
-# 模型文件（保留预训练模型）
-# models/*.pth
+# 新增数据集
+newdata/
+finetune_data/
+新增阀门数据集6.3/
+新增阀门数据集6.10/
+阀门测试集6.2/
+阀门测试集6.9/
+阀门测试集6.16/
 
 # 输出结果
 output/
-test_input/
 
-# 调试图
-cvnew_debug*.png
+# 调试输出
+debug10/
+debug10_side/
+error_analysis/
+error_analysis_aug/
+
+# 测试输入
+test_input_top/
+test_input_side/
+test_input_side_finetune/
+
+# 未标注数据
+unlabbled_top/
+unlabbled_side/
 
 # Python 缓存
 __pycache__/
@@ -29,3 +46,6 @@ __pycache__/
 
 # PPT
 *.pptx
+
+# torch hub 缓存
+checkpoints/

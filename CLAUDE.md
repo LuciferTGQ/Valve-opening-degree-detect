@@ -20,17 +20,24 @@
 
 本项目采用 CV + CNN 双通道融合：
 
-1. **CV 方法（cvnew_predictor）**：HoughCircles 定位圆 → 色块质心 + 几何法精确定位圆心 → 多半径弧长比法计算角度
+1. **CV 方法（cvnew_predictor）**：
+   - **top 视角**：色块质心定位 → 几何法精确定位圆心 → 色块配对优化 → 多半径弧长比法计算角度
+   - **side 视角**：红绿颜色带投影宽度 → 多扫描线测宽 → 圆弦几何关系换算角度（队友实现）
 2. **CNN 方法（cnn_predictor）**：MobileNetV3-Small 回归模型，输入单帧图像 → 输出角度
-3. **融合（ensemble）**：CV:0.3 + CNN:0.7 加权融合
+3. **CV+CNN 方法（cvcnn_predictor）**：CV 提取红绿色块区域 → 裁剪阀门区域 → 喂给 CNN 推理（仅 side 视角）
+4. **融合（ensemble）**：CV:0.3 + CNN:0.7 加权融合
 
 ### 数据增强策略
 
 - 水平翻转（50%）、垂直翻转（30%）
-- 亮度调节（0.7-1.3x）
-- 对比度调节（0.75-1.25x）
+- 亮度调节（0.7-1.3x）、对比度调节（0.75-1.25x）
 - 高斯模糊（kernel 3/5/7，50%）
 - 旋转（-15° ~ +15°）
+- 高斯噪声（σ 3-12，50%）
+- 缩放（0.8-1.2x，50%，模拟远近拍摄）
+- 颜色抖动（通道偏移 ±15，50%）
+- 透视变换（5% 边距，50%，模拟拍摄角度偏差）
+- 每张原图增强 95 次（默认）
 
 ## 数据结构
 
@@ -38,51 +45,43 @@
 
 ```
 origin data/
-├── top/                    # 顶部视角图像（44张，jpg）
-│   └── NNNN_angle.jpg      # 如 0001_3.4.jpg
-├── side/                   # 正侧面视角图像（128张，jpg+png混合）
-│   ├── NNNN_angle.jpg      # 38张，如 0001_8.2.jpg
-│   └── p_N_angle.png       # 90张，如 p_1_1.0.png
+├── top/                    # 顶部视角原图（jpg）
+├── side/                   # 正侧面视角原图（jpg + png 混合）
 ├── data_augmented/
-│   └── top/                # 增强后的顶部图像（484张 = 44原图 × 11变体）
+│   ├── top/                # 增强后的顶部图像
+│   └── side/               # 增强后的侧面图像
 ├── video/                  # 原始视频文件
 │   ├── *.mp4               # 顶部和侧面拍摄视频
-│   ├── side1/              # 侧面1抽帧结果（72张，1-80°）
-│   │   └── p_N_angle.png
-│   └── side2/              # 侧面2抽帧结果（90张，1-80°）
-│       └── p_N_angle.png
+│   ├── side1/              # 侧面1抽帧结果
+│   └── side2/              # 侧面2抽帧结果
 └── 蒙板/                   # 拍摄蒙版模板
-    ├── 红绿1.png ~ 红绿3.png
-    ├── 红黄1.png ~ 红黄3.png
-    └── 圆形阀门/            # 圆形阀门蒙版（上/侧视角）
 
-unlabbled_top/              # 未标注的顶部视角照片（57张）
-unlabbled_side/             # 未标注的侧面视角照片（114张）
+新增阀门数据集6.3/          # 新增数据（220张/视角，含原图+增强混合，角度 6.7-46.6°）
+├── top/
+└── side/
+
+阀门测试集6.2/              # 测试集（20张/视角，CSV 记录标准答案）
+├── top/
+│   └── top.csv
+└── side/
+    └── side.csv
+
+test_input_top/             # top 测试图片（20张，来自 6.2）
+test_input_side/            # side 测试图片（20张，来自 6.2）
+finetune_data/top/          # 6.3 top 数据（用于微调实验）
+output/                     # 预测结果 CSV + ground truth
 ```
 
 ### 文件命名规范
 
-- `top/` 和 `side/`（jpg部分）：`NNNN_angle.jpg`，序号 4 位零填充，角度精确到 1 位小数
-- `side/`（png部分）和 `video/*/`：`p_N_angle.png`，序号无零填充
+- `origin data/top/` 和 `origin data/side/`：`NNNN_angle.jpg`，序号 4 位零填充，角度精确到 1 位小数
+- `新增阀门数据集6.3/`：`NNNN_angle.jpg`，序号从 0159 起
+- `阀门测试集6.2/`：`N.jpg`（序号无零填充），角度在 CSV 文件中
 - 角度范围：0.0-80.0 度（全绿=80°，全红=0°）
-
-### 关键数据量
-
-| 目录 | 视角 | 数量 | 格式 |
-|------|------|------|------|
-| top/ | 顶部 | 44张 | jpg |
-| side/ | 正侧面 | 128张 | jpg+png |
-| data_augmented/top/ | 顶部增强 | 484张 | jpg |
-| video/side1/ | 侧面1帧 | 72张 | png |
-| video/side2/ | 侧面2帧 | 90张 | png |
-| unlabbled_top/ | 未标注顶部 | 57张 | jpg |
-| unlabbled_side/ | 未标注侧面 | 114张 | jpg |
 
 ## 阀门类型
 
-本项目**只关注 top 和 side 两种视角**，只关注**红绿阀门**：
-
-1. **红绿阀门**：顶部红绿指示器，圆柱体主体
+本项目**只关注 top 和 side 两种视角**，只关注**红绿阀门**。
 
 ## 核心约束
 
@@ -96,79 +95,106 @@ unlabbled_side/             # 未标注的侧面视角照片（114张）
 ## 代码结构
 
 ```
+run_test_top.py              # top 视角快速测试入口（CVnew + CNN + 融合 + 调试图）
+run_test_side.py             # side 视角快速测试入口（CVnew + CNN + CV+CNN + 融合）
+test_input_top/              # top 测试图片（20张）
+test_input_side/             # side 测试图片（20张）
 src/
-├── cvnew_predictor.py  # CV 预测器（HoughCircles + 色块质心 + 几何法 + 弧长比法）
-├── cnn_predictor.py    # CNN 模型定义（MobileNetV3-Small）+ 单帧推理
-├── ensemble.py         # CV + CNN 加权融合（默认 CV:0.3, CNN:0.7）
-├── data_augment.py     # 数据增强（翻转、亮度、对比度、模糊、旋转）
-├── train.py            # 训练脚本（数据增强 → 划分 → 训练 → 保存最佳模型）
-├── predict.py          # 批量预测入口（文件夹 → CSV）
-└── compare_methods.py  # 方法精度对比工具
-evaluate.py             # 评估脚本（MAE/RMSE/分段指标 + matplotlib 可视化）
-prepare_test.py         # 工具：随机采样图片到 test_input/
-prepare_test_with_gt.py # 工具：采样图片 + 保存 ground truth CSV
-run_test.py             # 运行 CV/CNN/Ensemble 三种方法并对比
+├── common/                  # 共用代码（视角无关）
+│   ├── cnn_predictor.py     # CNN 模型定义（MobileNetV3-Small）+ 推理
+│   ├── ensemble.py          # CV + CNN 加权融合（默认 CV:0.3, CNN:0.7）
+│   ├── data_augment.py      # 数据增强（翻转、亮度、对比度、模糊、旋转、噪声、缩放等）
+│   ├── train.py             # 训练循环（支持断点续训、--augment 0 跳过增强）
+│   ├── evaluate.py          # 评估指标 + matplotlib 可视化
+│   └── predict.py           # 批量预测（文件夹 → CSV）
+├── top/                     # top 视角专用
+│   ├── cvnew_predictor.py   # CV 预测器（色块质心 + 几何法 + 弧长比法）
+│   ├── visualize_errors.py  # CV 流程可视化（2x3 拼图）
+│   └── prepare_test.py      # 测试数据准备
+└── side/                    # side 视角专用
+    ├── cvnew_predictor.py   # CV 预测器（红绿颜色带投影宽度 + 圆弦几何法）
+    ├── cvcnn_predictor.py   # CV+CNN 预测器（CV 裁剪阀门区域 → CNN 推理）
+    ├── evaluate.py          # side 评估脚本
+    └── prepare_test.py      # 测试数据准备
 tests/
-├── test_predict_cvnew.py     # CV 预测测试
-├── test_predict_cnn.py       # CNN 预测测试
-└── test_predict_ensemble.py  # 融合预测测试
+├── test_predict_cvnew_top.py  # CV 预测测试
+├── test_predict_cnn.py        # CNN 预测测试
+└── test_predict_ensemble.py   # 融合预测测试
 models/
-└── mobilenetv3_top.pth       # 已训练的顶部视角模型（~4MB）
+├── mobilenetv3_top.pth        # 已训练的顶部视角模型
+├── mobilenetv3_top_checkpoint.pth   # top 训练 checkpoint
+├── mobilenetv3_side.pth       # 已训练的侧面视角模型
+└── mobilenetv3_side_checkpoint.pth  # side 训练 checkpoint
 ```
 
 ## 当前实现状态
 
 ### 已完成
 
-- [x] CV 预测器（HoughCircles 定位 → 色块质心 + 几何法精确定心 → 多半径弧长比法）
+- [x] **top CV 预测器**（色块质心定位 → 几何法精确定心 → 色块配对优化 → 多半径弧长比法）
+- [x] **side CV 预测器**（红绿颜色带投影 → 多扫描线测宽 → 圆弦几何换算，队友实现）
+- [x] **CV+CNN 预测器**（CV 裁剪阀门区域 → CNN 推理，仅 side）
 - [x] CNN 模型定义（MobileNetV3-Small，回归头 576→128→1）
-- [x] 数据增强模块（6 种增强策略）
-- [x] 训练脚本（含数据增强、train/val 划分、ReduceLROnPlateau 学习率调度）
+- [x] 数据增强模块（8 种增强策略，每张原图增强 95 次）
+- [x] 训练脚本（含数据增强、train/val 划分、ReduceLROnPlateau 学习率调度、断点续训、--augment 0）
 - [x] 融合模块（CV + CNN 加权，CV:0.3, CNN:0.7）
 - [x] 批量预测脚本（文件夹 → CSV）
 - [x] **顶部视角模型已训练**（`models/mobilenetv3_top.pth`）
+- [x] **侧面视角模型已训练**（`models/mobilenetv3_side.pth`）
 - [x] 评估脚本 + 精度对比
+- [x] 6.2 测试集 ground truth CSV 生成
 
-### 顶部视角精度（44张，CVnew 方法）
+### 精度
 
-| 指标 | 值 |
+**Top 视角**（6.2 测试集，20 张）：
+
+| 方法 | MAE |
 |------|-----|
-| MAE | 1.15° |
-| RMSE | 1.39° |
-| 最大误差 | 3.40° |
+| CNN | 0.910° |
+| 融合 | 1.340° |
 
-- 0-20°：MAE 1.07（15张）
-- 20-40°：MAE 1.23（18张）
-- 40-60°：MAE 1.48（4张）
-- 60-80°：MAE 1.10（6张）
+**Side 视角**（6.2 测试集，20 张）：
+
+| 方法 | MAE |
+|------|-----|
+| CNN | ~2.2° |
+| CV+CNN | 待评估 |
 
 ### 待完成
 
-- [ ] 侧面视角模型训练（`origin data/side/` 数据已就绪，128张）
 - [ ] 后端服务器（视频抽帧 + 推理 API）
 - [ ] 前端 App
-- [ ] CNN 顶部模型精度评估（需对比 ground truth）
+- [ ] CV+CNN 效果优化（裁剪区域与训练数据分布差异导致效果未明显提升）
 
 ### 运行命令
 
 ```bash
 # 训练顶部视角模型
-python src/train.py --data "origin data/top" --model models/mobilenetv3_top.pth --epochs 100
+python src/common/train.py --data "origin data/top" --model models/mobilenetv3_top.pth --epochs 100
 
 # 训练侧面视角模型
-python src/train.py --data "origin data/side" --model models/mobilenetv3_side.pth --epochs 100
+python src/common/train.py --data "origin data/side" --model models/mobilenetv3_side.pth --epochs 100
+
+# 断点续训
+python src/common/train.py --data "origin data/side" --model models/mobilenetv3_side.pth --epochs 100 --resume
+
+# 跳过增强直接训练（用于已增强的数据）
+python src/common/train.py --data "finetune_data/top" --model models/mobilenetv3_top.pth --augment 0 --resume --lr 0.0001
 
 # 批量预测（CV + CNN 融合）
-python src/predict.py --input "origin data/top" --output output/result.csv --model models/mobilenetv3_top.pth
+python src/common/predict.py --input "origin data/top" --output output/result.csv --model models/mobilenetv3_top.pth
 
 # 仅 CV 预测（无需模型）
-python src/predict.py --input "origin data/top" --output output/result_cv.csv --no-cnn
+python src/common/predict.py --input "origin data/top" --output output/result_cv.csv --no-cnn
 
 # 评估精度
-python evaluate.py
+python src/common/evaluate.py --data "origin data/top" --model models/mobilenetv3_top.pth
 
-# 对比方法精度
-python src/compare_methods.py --data "origin data/top" --model models/mobilenetv3_top.pth
+# 快速测试（top 视角，CVnew + CNN + 融合 + 调试图）
+python run_test_top.py
+
+# 快速测试（side 视角，CVnew + CNN + CV+CNN + 融合）
+python run_test_side.py
 
 # 运行测试
 pytest tests/ -v
@@ -177,7 +203,7 @@ pytest tests/ -v
 ## 环境依赖
 
 - Python 3.x
-- PyTorch ≥ 2.1
+- PyTorch ≥ 2.1（CUDA 推荐，RTX 4060 Laptop 实测可用）
 - OpenCV ≥ 4.7
 - torchvision
 - scikit-learn
@@ -189,3 +215,5 @@ pytest tests/ -v
 
 - `安特威阀门项目总结0630_edited.pptx`：老师的完整项目方案（OpenCV 方法 + AI 方法）
 - `蒙板/`：拍摄时使用的蒙版模板
+- `阀门测试集6.2/`：测试集数据 + 标准答案 CSV
+- `新增阀门数据集6.3/`：新增训练数据（角度 6.7-46.6°，每角度 11 张混合原图+增强）

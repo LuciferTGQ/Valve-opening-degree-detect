@@ -3,9 +3,9 @@ import os
 import sys
 import tempfile
 import shutil
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from predict import predict_folder
+from src.common.predict import predict_folder
 
 def test_predict_folder_cnn():
     """测试使用 CNN 的预测"""
