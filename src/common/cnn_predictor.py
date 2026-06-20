@@ -7,9 +7,10 @@ import numpy as np
 class ValveAngleRegressor(nn.Module):
     """阀门角度回归模型"""
 
-    def __init__(self):
+    def __init__(self, pretrained: bool = True):
         super().__init__()
-        self.backbone = models.mobilenet_v3_small(pretrained=True)
+        weights = models.MobileNet_V3_Small_Weights.DEFAULT if pretrained else None
+        self.backbone = models.mobilenet_v3_small(weights=weights)
         # 替换最后的分类层
         self.backbone.classifier = nn.Sequential(
             nn.Linear(576, 128),
