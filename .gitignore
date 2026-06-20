@@ -65,3 +65,7 @@ checkpoints/
 # 模型权重文件
 # 权重文件(4MB)可以上传，checkpoint(12MB)不上传
 *_checkpoint.pth
+
+# HTTP video uploads and local frpc secrets
+uploads/
+tools/frp/frpc.toml

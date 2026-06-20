@@ -1,0 +1,12 @@
+serverAddr = "ecs ip"
+serverPort = 7000
+
+# 必须与 ECS 上 frps 的 auth.token 一致。不要把真实 token 提交到 Git。
+auth.token = "REPLACE_WITH_NEW_TOKEN"
+
+[[proxies]]
+name = "valve-video-upload"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 8000
+remotePort = 9000
