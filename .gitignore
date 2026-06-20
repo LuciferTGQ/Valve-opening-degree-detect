@@ -62,5 +62,6 @@ __pycache__/
 # torch hub 缓存
 checkpoints/
 
-# 模型权重文件（太大不上传）
-*.pth
+# 模型权重文件
+# 权重文件(4MB)可以上传，checkpoint(12MB)不上传
+*_checkpoint.pth
