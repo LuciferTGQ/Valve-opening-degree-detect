@@ -5,6 +5,16 @@ origin data/
 # 生成的增强数据
 data_augmented/
 
+# CV裁剪后的数据
+data_cropped/
+data_cropped_original/
+
+# 强后的裁剪数据
+data_augmented_cropped/
+
+# 平衡增强数据
+data_augmented_balanced/
+
 # 新增数据集
 newdata/
 finetune_data/
@@ -20,6 +30,8 @@ output/
 # 调试输出
 debug10/
 debug10_side/
+debug_crop/
+debug_crop2/
 error_analysis/
 error_analysis_aug/
 
@@ -49,3 +61,6 @@ __pycache__/
 
 # torch hub 缓存
 checkpoints/
+
+# 模型权重文件（太大不上传）
+*.pth

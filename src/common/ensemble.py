@@ -10,6 +10,14 @@ def _get_cv_predictor(view: str):
     return predict_cvnew
 
 
+def _get_cnn_predictor(view: str):
+    """side 用 CV裁剪+CNN，top 用直接CNN"""
+    if view == 'side':
+        from src.side.cvcnn_predictor import predict_cvcnn
+        return predict_cvcnn
+    return predict_cnn
+
+
 def predict_ensemble(
     image_path: str,
     model_path: str,
@@ -31,6 +39,7 @@ def predict_ensemble(
         融合后的角度预测 (0-80)
     """
     predict_cvnew = _get_cv_predictor(view)
+    predict_cnn_fn = _get_cnn_predictor(view)
 
     # CVnew 预测
     try:
@@ -39,10 +48,10 @@ def predict_ensemble(
         print(f"CVnew 预测失败: {e}")
         cv_angle = 40.0
 
-    # CNN 预测
+    # CNN 预测（side 用 CV裁剪+CNN，top 用直接CNN）
     if os.path.exists(model_path):
         try:
-            cnn_angle = predict_cnn(image_path, model_path)
+            cnn_angle = predict_cnn_fn(image_path, model_path)
         except Exception as e:
             print(f"CNN 预测失败: {e}")
             cnn_angle = cv_angle

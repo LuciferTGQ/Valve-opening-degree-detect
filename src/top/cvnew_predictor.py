@@ -289,7 +289,8 @@ def predict_cvnew(image_path: str, refine_ratio: float = 0.8) -> float:
     Returns:
         预测角度 (0-80)
     """
-    img = cv2.imread(image_path)
+    data = np.fromfile(image_path, dtype=np.uint8)
+    img = cv2.imdecode(data, cv2.IMREAD_COLOR)
     if img is None:
         raise ValueError(f"无法读取图片: {image_path}")
 

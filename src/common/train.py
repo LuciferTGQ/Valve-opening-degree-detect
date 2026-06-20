@@ -1,5 +1,5 @@
 """
-训练 CNN 模型（支持断点续训）
+训练 CNN 模型（支持断点续训、CV裁剪模式）
 
 用法：
   # 训练 top 模型
@@ -7,6 +7,9 @@
 
   # 训练 side 模型
   python src/common/train.py --data "origin data/side" --model models/mobilenetv3_side.pth --epochs 100 --batch-size 32
+
+  # 训练 side 模型（CV裁剪模式，训练时动态裁剪阀门区域）
+  python src/common/train.py --data "origin data/side" --model models/mobilenetv3_side_cv.pth --epochs 100 --crop
 
   # 暂停后继续（从断点恢复，保留优化器状态和学习率）
   python src/common/train.py --data "origin data/side" --model models/mobilenetv3_side.pth --epochs 100 --resume
@@ -65,7 +68,8 @@ def train_model(
     epochs: int = 100,
     batch_size: int = 16,
     learning_rate: float = 1e-3,
-    resume: bool = False
+    resume: bool = False,
+    crop: bool = False
 ):
     """
     训练 CNN 模型
@@ -79,7 +83,10 @@ def train_model(
         learning_rate: 学习率
     """
     print("=" * 50)
-    print("开始训练 CNN 模型")
+    if crop:
+        print("开始训练 CNN 模型（CV裁剪模式）")
+    else:
+        print("开始训练 CNN 模型")
     print("=" * 50)
 
     # 1. 数据增强（augment_times=0 时跳过，直接使用原图）
@@ -113,9 +120,17 @@ def train_model(
 
     # 3. 创建数据集
     transform = get_transform()
-    train_dataset = ValveDataset(train_files, transform)
-    val_dataset = ValveDataset(val_files, transform)
-    test_dataset = ValveDataset(test_files, transform)
+
+    if crop:
+        from src.side.crop_dataset import CropValveDataset
+        print("CV裁剪模式已启用: 训练时动态裁剪阀门区域")
+        train_dataset = CropValveDataset(train_files, transform)
+        val_dataset = CropValveDataset(val_files, transform)
+        test_dataset = CropValveDataset(test_files, transform)
+    else:
+        train_dataset = ValveDataset(train_files, transform)
+        val_dataset = ValveDataset(val_files, transform)
+        test_dataset = ValveDataset(test_files, transform)
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
@@ -239,6 +254,7 @@ if __name__ == "__main__":
     parser.add_argument('--batch-size', type=int, default=16, help='批次大小')
     parser.add_argument('--lr', type=float, default=1e-3, help='学习率')
     parser.add_argument('--resume', action='store_true', help='从已有模型继续训练')
+    parser.add_argument('--crop', action='store_true', help='启用CV裁剪模式（仅side视角，训练时动态裁剪阀门区域）')
 
     args = parser.parse_args()
 
@@ -252,5 +268,6 @@ if __name__ == "__main__":
         epochs=args.epochs,
         batch_size=args.batch_size,
         learning_rate=args.lr,
-        resume=args.resume
+        resume=args.resume,
+        crop=args.crop
     )

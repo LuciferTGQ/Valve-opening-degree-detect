@@ -10,7 +10,8 @@ from src.common.ensemble import predict_ensemble
 from src.side.cvcnn_predictor import predict_cvcnn
 
 INPUT_DIR = "test_input_side"
-MODEL_PATH = "models/mobilenetv3_side.pth"
+NEW_MODEL_PATH = "models/mobilenetv3_side_cv.pth"
+OLD_MODEL_PATH = "models/mobilenetv3_side.pth"
 OUTPUT_DIR = "output"
 
 
@@ -57,33 +58,34 @@ def main():
         print("=== CVnew 预测 ===")
         print("side CV 预测器尚未实现，跳过")
 
-    # CNN
-    cnn_results = []
-    ens_results = []
+    # CNN (新模型: CV裁剪+CNN)
     cvcnn_results = []
-    if os.path.exists(MODEL_PATH):
-        print("\n=== CNN 预测 ===")
-        cnn_results = run_prediction("CNN", lambda p: predict_cnn(p, MODEL_PATH), images)
-        save_csv(cnn_results, os.path.join(OUTPUT_DIR, "result_cnn_side.csv"))
-
-        # CV+CNN
-        print("\n=== CV+CNN 预测（CV 裁剪 + CNN 推理）===")
-        cvcnn_results = run_prediction("CV+CNN", lambda p: predict_cvcnn(p, MODEL_PATH), images)
+    cnn_old_results = []
+    ens_results = []
+    if os.path.exists(NEW_MODEL_PATH):
+        print("\n=== CV+CNN 预测（新模型，CV裁剪+CNN推理）===")
+        cvcnn_results = run_prediction("CV+CNN", lambda p: predict_cvcnn(p, NEW_MODEL_PATH), images)
         save_csv(cvcnn_results, os.path.join(OUTPUT_DIR, "result_cvcnn_side.csv"))
+
+        # 旧模型对比
+        if os.path.exists(OLD_MODEL_PATH):
+            print("\n=== 旧模型对比（直接CNN，无裁剪）===")
+            cnn_old_results = run_prediction("CNN-old", lambda p: predict_cnn(p, OLD_MODEL_PATH), images)
+            save_csv(cnn_old_results, os.path.join(OUTPUT_DIR, "result_cnn_old_side.csv"))
 
         # 融合
         if cvnew_results:
-            print("\n=== 融合预测 (CVnew:0.3 + CNN:0.7) ===")
+            print("\n=== 融合预测 (CVnew:0.3 + CV+CNN:0.7) ===")
             ens_results = run_prediction(
                 "Ensemble",
-                lambda p: predict_ensemble(p, MODEL_PATH, view='side'),
+                lambda p: predict_ensemble(p, NEW_MODEL_PATH, view='side'),
                 images,
             )
             save_csv(ens_results, os.path.join(OUTPUT_DIR, "result_ensemble_side.csv"))
     else:
-        print(f"\nCNN 模型不存在: {MODEL_PATH}，跳过 CNN 预测")
-        print("请先训练 side 模型:")
-        print("  python src/common/train.py --data 'origin data/side' --model models/mobilenetv3_side.pth --augment 20 --epochs 100")
+        print(f"\nCNN 模型不存在: {NEW_MODEL_PATH}，跳过 CNN 预测")
+        print("请先训练 side CV-crop 模型:")
+        print("  python src/common/train.py --data 'data_augmented_cropped/side' --model models/mobilenetv3_side_cv.pth --augment 0 --epochs 100")
 
     # 加载标准答案
     gt_path = os.path.join(OUTPUT_DIR, "ground_truth_side.csv")
@@ -94,22 +96,22 @@ def main():
                 gt_data[row['filename']] = float(row['angle'])
 
     cvnew_dict = dict(cvnew_results)
-    cnn_dict = dict(cnn_results)
-    ens_dict = dict(ens_results)
     cvcnn_dict = dict(cvcnn_results)
+    cnn_old_dict = dict(cnn_old_results)
+    ens_dict = dict(ens_results)
 
     # 对比标准答案
     if gt_data:
         print("\n=== 与标准答案对比 ===")
-        print(f"{'文件':<12} {'真实':>6} {'CVnew':>8} {'CNN':>8} {'CV+CNN':>8} {'融合':>8}")
+        print(f"{'文件':<12} {'真实':>6} {'CVnew':>8} {'CV+CNN':>8} {'CNN旧':>8} {'融合':>8}")
         print("-" * 56)
         for img in images:
             true_angle = gt_data.get(img, '-')
             cvnew_a = cvnew_dict.get(img, '-')
-            cnn_a = cnn_dict.get(img, '-')
             cvcnn_a = cvcnn_dict.get(img, '-')
+            cnn_old_a = cnn_old_dict.get(img, '-')
             ens_a = ens_dict.get(img, '-')
-            print(f"{img:<12} {true_angle:>6} {cvnew_a:>8} {cnn_a:>8} {cvcnn_a:>8} {ens_a:>8}")
+            print(f"{img:<12} {true_angle:>6} {cvnew_a:>8} {cvcnn_a:>8} {cnn_old_a:>8} {ens_a:>8}")
 
     # CVnew 调试图输出（预留接口）
     try:

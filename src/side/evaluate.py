@@ -19,6 +19,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from src.common.cnn_predictor import predict_cnn
+from src.side.cvcnn_predictor import predict_cvcnn
 
 
 def load_ground_truth(data_dir):
@@ -41,7 +42,7 @@ def calc_metrics(gts, preds):
 def main():
     parser = argparse.ArgumentParser(description='Side 视角精度评估')
     parser.add_argument('--data', default='origin data/side', help='数据目录')
-    parser.add_argument('--model', default='models/mobilenetv3_side.pth', help='CNN 模型路径')
+    parser.add_argument('--model', default='models/mobilenetv3_side_cv.pth', help='CNN 模型路径')
     parser.add_argument('--output', default='output/eval_side', help='输出目录')
     args = parser.parse_args()
 
@@ -57,13 +58,18 @@ def main():
 
     print(f"加载 {len(data)} 张 side 图片 from {data_dir}\n")
 
-    # CNN 预测
-    cnn_preds = None
+    # CV+CNN 预测（新模型）
+    cvcnn_preds = None
     if os.path.exists(model_path):
-        print("正在运行 CNN 预测...")
-        cnn_preds = [predict_cnn(p, model_path) for p in paths]
-    else:
-        print(f"CNN 模型不存在: {model_path}，跳过")
+        print("正在运行 CV+CNN 预测...")
+        cvcnn_preds = [predict_cvcnn(p, model_path) for p in paths]
+
+    # 旧模型 CNN 对比
+    old_model_path = 'models/mobilenetv3_side.pth'
+    cnn_old_preds = None
+    if os.path.exists(old_model_path):
+        print("正在运行旧模型 CNN 预测（对比）...")
+        cnn_old_preds = [predict_cnn(p, old_model_path) for p in paths]
 
     # CV 预测（预留接口）
     cvnew_preds = None
@@ -77,8 +83,10 @@ def main():
     methods = {}
     if cvnew_preds:
         methods['CVnew'] = cvnew_preds
-    if cnn_preds:
-        methods['CNN'] = cnn_preds
+    if cvcnn_preds:
+        methods['CV+CNN'] = cvcnn_preds
+    if cnn_old_preds:
+        methods['CNN旧'] = cnn_old_preds
 
     if not methods:
         print("没有任何可用的预测方法，退出")
